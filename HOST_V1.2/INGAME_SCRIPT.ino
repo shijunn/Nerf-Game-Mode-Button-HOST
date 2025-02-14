@@ -51,7 +51,6 @@ void checkendgame()
       }
     }
   }
-  
 }
 
 void checkscore() // doesnt reset variables on team boards

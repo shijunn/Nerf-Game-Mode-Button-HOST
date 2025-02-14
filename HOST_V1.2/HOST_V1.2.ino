@@ -46,32 +46,40 @@
 #define RO_MODE true
 #define TX 16
 #define RX 17
+// average reading threshold for joystick
+#define LEFT_JOYSTICK_THRESHOLD_MIN 750
+#define LEFT_JOYSTICK_THRESHOLD_MAX 850
+#define RIGHT_JOYSTICK_THRESHOLD_MIN 2340
+#define RIGHT_JOYSTICK_THRESHOLD_MAX 2380
+#define MIDDLE_JOYSTICK_THRESHOLD_MIN 1940
+#define MIDDLE_JOYSTICK_THRESHOLD_MAX 1970
+#define DOWN_JOYSTICK_THRESHOLD_MIN 1520
+#define DOWN_JOYSTICK_THRESHOLD_MAX 1550
+#define UP_JOYSTICK_THRESHOLD_MIN 320
+#define UP_JOYSTICK_THRESHOLD_MAX 370
 
-const int neopixelpin = 19;
-const int joystick = 2;      // joystick
-const int cancelButton = 4;  // OTA button
-const int extButton = 5;     // external button
-
-// average reading threshold
-// values vary on different boards
-const int LEFT_JOYSTICK_THRESHOLD_MIN = 750;
-const int LEFT_JOYSTICK_THRESHOLD_MAX = 850;
-const int RIGHT_JOYSTICK_THRESHOLD_MIN = 2340;
-const int RIGHT_JOYSTICK_THRESHOLD_MAX = 2380;
-const int MIDDLE_JOYSTICK_THRESHOLD_MIN = 1940;
-const int MIDDLE_JOYSTICK_THRESHOLD_MAX = 1970;
-const int DOWN_JOYSTICK_THRESHOLD_MIN = 1520;
-const int DOWN_JOYSTICK_THRESHOLD_MAX = 1550;
-const int UP_JOYSTICK_THRESHOLD_MIN = 320;
-const int UP_JOYSTICK_THRESHOLD_MAX = 370;
-
-const int visiblerows = 3; // rows visible on display
-int menuoffset = 0;
-//const int totalItems = 7;
-const int visiblerows2 = 2;
-int menuoffset2 = 0;
-//const int totalItems2 = 2;
-
+// define function declarations
+void OnDataSent(const uint8_t *mac_addr, esp_now_send_status_t status);
+void OnDataRecv(const uint8_t *mac, const uint8_t *incomingData, int len);
+void readstick(void);
+void oledDisplayCenter(String text);
+void oledDisplayInt(int number);
+void oledDisplayCountdown(unsigned long seconds);
+void oledDisplayStrInt(int number, String text);
+void oledDisplayTime(unsigned long number1, String text1, unsigned long number2, String text2);
+void menudisplay(void);
+void resetvariables(void);
+void colorWipe(uint32_t c, uint8_t wait);
+void setting(void);
+void checkendgame(void);
+void checkscore(void);
+void checkprogress(void);
+void togglescreenfunction(void);
+void readstickinsettings(void);
+void sendgamemode(void);
+void sendall(void);
+void drawmenu(int highlightedRow, const char* labels[], const uint8_t* icons[], int totalItems);
+void drawmenu2(int highlightedRow, const char* labels[], const uint8_t* icons[], int totalItems2);
 
 /*
 why is enum used 
@@ -80,19 +88,74 @@ https://www.reddit.com/r/learnprogramming/comments/yk8d84/comment/iurxecv/?utm_s
 enum gamemodes
 { // start from 0 because of icon arrays later on
   CAPTURE_THE_FLAG = 0,  // enum automatically adds the next integer so
-  DOMINATION,            // 2
-  KING_OF_THE_HILL,      // 3
-  CLICKER_DOMINATION,    // 4
-  CHESS_CLOCK,           // 5
-  SETTING,               // 6
-  BOARD_NUMBER,          // 7
-  NUM_MODES              // 8, if game modes are added or removed down the line, enum will automatically change the integer of NUM_MODES
+  DOMINATION,            // 1
+  KING_OF_THE_HILL,      // 2
+  CLICKER_DOMINATION,    // 3
+  CHESS_CLOCK,           // 4
+  SETTING,               // 5
+  BOARD_NUMBER,          // 6
+  NUM_MODES              // 7, if game modes are added or removed down the line, enum will automatically change the integer of NUM_MODES
 };
 
+// variables for ESP NOW transmission
+typedef struct game_struct
+{
+  int score;
+  unsigned long gamemodetime;
+  bool endgame;
+  unsigned long checktime;
+  unsigned long newTime;
+  unsigned long testtime;
+  unsigned long recordedTime;
+  int modenum = CAPTURE_THE_FLAG;
+  bool confirm = false;
+  unsigned long countdowntime;
+  int id;
+  int togglescreen = 0;
+  bool middlelongpressed = false;
+  bool goback = false;
+  bool button;
+} game_struct;
+
+game_struct gamedata; // storing data on this board (host)
+game_struct incominggamedata; // for team or host board
+game_struct board1;
+game_struct board2;
+game_struct boards[2] = {board1, board2};
+
+// create variables to assign values from the recv callback function to update and store new values
+bool board1_endgame;
+bool board2_endgame;
+bool board1_button;
+bool board2_button;
+int board1_score;
+int board2_score;
+unsigned long board1_testtime;
+unsigned long board2_testtime;
+unsigned long board1_recordedTime;
+unsigned long board2_recordedTime;
+unsigned long board1_checktime;
+unsigned long board2_checktime;
+unsigned long board1_newTime;
+unsigned long board2_newTime;
+
+// ESP32 pin definition
+const int neopixelpin = 19;
+const int joystick = 2;      // joystick
+const int cancelButton = 4;  // OTA button
+const int extButton = 5;     // external button
+
+// menu variables
+const int visiblerows = 3; // rows visible on display
+int menuoffset = 0;
+const int visiblerows2 = 2; // for sub menu (settings)
+int menuoffset2 = 0;
+
+// declare variables
 int reading = 0;
 int avgReading = 0;
 int lastmenu = -1;
-int menu = CAPTURE_THE_FLAG;     // menu = 1
+int menu = CAPTURE_THE_FLAG;     // menu = 0
 int laststate = HIGH;
 int buttonstate;
 int defaultbuttonstate = HIGH;
@@ -100,13 +163,6 @@ bool startedrecording = false;
 bool pressed = false;
 bool storedPrev = false;
 bool savesettings = false;
-
-Preferences preferences;
-
-uint8_t broadcastAddressBlue[] = {0xe4, 0xb3, 0x23, 0x94, 0x3b, 0x00};
-uint8_t broadcastAddressRed[] = {0xe4, 0xb3, 0x23, 0x94, 0x3b, 0x14};
-esp_now_peer_info_t peerInfo;
-
 unsigned long pressedTime;
 unsigned long longpressduration;
 unsigned long startGameTime;
@@ -120,54 +176,71 @@ unsigned long countdownsetting = 0;
 unsigned long longpress = 0;
 uint32_t sendmodetime;
 
-Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
-Adafruit_NeoPixel pixels(NUM_PIXELS, neopixelpin, NEO_GRB + NEO_KHZ800);
-YX5300_ESP32 mp3;
+// define variables
+Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET); // declaration for SSD1306 display connected using I2C
+Adafruit_NeoPixel pixels(NUM_PIXELS, neopixelpin, NEO_GRB + NEO_KHZ800); // declartion for neopixel
+YX5300_ESP32 mp3; // declaration for serial to mp3 player
+Preferences preferences; // to store in ESP32 NVS
 
+// receiver MAC address
+uint8_t broadcastAddressBlue[] = {0xe4, 0xb3, 0x23, 0x94, 0x3b, 0x00};
+uint8_t broadcastAddressRed[] = {0xe4, 0xb3, 0x23, 0x94, 0x3b, 0x14};
+esp_now_peer_info_t peerInfo;
+
+// icon and IFB logo bitmap
 // 'icon_chess', 16x16px
-const unsigned char icon_chess [] PROGMEM = {
+const unsigned char icon_chess [] PROGMEM =
+{
 	0x03, 0xc0, 0x01, 0x80, 0x07, 0xe0, 0x08, 0x10, 0x10, 0x08, 0x20, 0x34, 0x40, 0x62, 0x40, 0xc2, 
 	0x41, 0x82, 0x41, 0x82, 0x40, 0x02, 0x40, 0x02, 0x20, 0x04, 0x10, 0x08, 0x08, 0x10, 0x07, 0xe0
 };
 // 'icon_clicker', 16x16px
-const unsigned char icon_clicker [] PROGMEM = {
+const unsigned char icon_clicker [] PROGMEM =
+{
 	0x00, 0x00, 0x0f, 0xf0, 0x10, 0x08, 0x20, 0x04, 0x20, 0x04, 0x30, 0x0c, 0x28, 0x14, 0x67, 0xe6, 
 	0xa0, 0x05, 0xa0, 0x05, 0xa0, 0x05, 0x98, 0x19, 0x87, 0xe1, 0x40, 0x02, 0x30, 0x0c, 0x0f, 0xf0
 };
 // 'icon_domination', 16x16px
-const unsigned char icon_domination [] PROGMEM = {
+const unsigned char icon_domination [] PROGMEM =
+{
 	0x03, 0xc0, 0x1c, 0x38, 0x20, 0x04, 0x40, 0x02, 0x4a, 0x52, 0x84, 0x21, 0x8a, 0x51, 0x80, 0x01, 
 	0x80, 0x01, 0x8f, 0xf1, 0x81, 0x21, 0x41, 0x22, 0x40, 0xc2, 0x20, 0x04, 0x1c, 0x38, 0x03, 0xc0
 };
 // 'icon_KOTH', 16x16px
-const unsigned char icon_KOTH [] PROGMEM = {
+const unsigned char icon_KOTH [] PROGMEM =
+{
 	0x41, 0x82, 0xa2, 0x45, 0x94, 0x29, 0x89, 0x91, 0xa1, 0x85, 0x80, 0x01, 0x7f, 0xfe, 0x00, 0x00, 
 	0x03, 0xc0, 0x04, 0x60, 0x0e, 0x10, 0x10, 0x0c, 0x10, 0x06, 0x20, 0xc3, 0x4c, 0x01, 0x80, 0x08
 };
 // 'icon_settings', 16x16px
-const unsigned char icon_settings [] PROGMEM = {
+const unsigned char icon_settings [] PROGMEM =
+{
 	0x01, 0x80, 0x12, 0x48, 0x2a, 0x54, 0x44, 0x22, 0x20, 0x04, 0x11, 0x88, 0x62, 0x46, 0x84, 0x21, 
 	0x84, 0x21, 0x62, 0x46, 0x11, 0x88, 0x20, 0x04, 0x44, 0x22, 0x2a, 0x54, 0x12, 0x48, 0x01, 0x80
 };
 // 'icon-ctf', 16x16px
-const unsigned char icon_ctf [] PROGMEM = {
+const unsigned char icon_ctf [] PROGMEM =
+{
 	0x00, 0x00, 0x38, 0x06, 0xc6, 0x19, 0x81, 0xe1, 0x80, 0x01, 0x80, 0x01, 0x80, 0x01, 0x80, 0x01, 
 	0xb8, 0x06, 0xc6, 0x18, 0x81, 0xe0, 0x80, 0x00, 0x80, 0x00, 0x80, 0x00, 0x80, 0x00, 0x80, 0x00
 };
 
 // 'icon_countdown', 16x16px
-const unsigned char icon_countdown [] PROGMEM = {
+const unsigned char icon_countdown [] PROGMEM =
+{
 	0x03, 0xc0, 0x01, 0x80, 0x07, 0xe0, 0x08, 0x10, 0x13, 0x08, 0x27, 0x04, 0x4f, 0x02, 0x5f, 0x02, 
 	0x5f, 0x02, 0x5f, 0xfa, 0x5f, 0xfa, 0x4f, 0xf2, 0x27, 0xe4, 0x13, 0xc8, 0x08, 0x10, 0x07, 0xe0
 };
 // 'icon_gametime', 16x16px
-const unsigned char icon_gametime [] PROGMEM = {
+const unsigned char icon_gametime [] PROGMEM =
+{
 	0x7f, 0xfe, 0x40, 0x02, 0x20, 0x04, 0x10, 0x08, 0x0f, 0xf0, 0x07, 0xe0, 0x03, 0xc0, 0x01, 0x80, 
 	0x01, 0x80, 0x02, 0x40, 0x04, 0x20, 0x08, 0x90, 0x11, 0x08, 0x20, 0x04, 0x7c, 0xea, 0x7f, 0xfe
 };
 
 // boot up logo
-const unsigned char ifb_logo [] PROGMEM = {
+const unsigned char ifb_logo [] PROGMEM =
+{
 	0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 
 	0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 
 	0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 
@@ -234,84 +307,27 @@ const unsigned char ifb_logo [] PROGMEM = {
 	0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff
 };
 
-const char* menuLabels[] = {"Flag", "Dom", "KOTH", "Clicker", "Chess", "Settings", "Board No."};
+const char* menuLabels[] =
+{
+  "Flag",
+  "Dom",
+  "KOTH",
+  "Clicker",
+  "Chess",
+  "Settings",
+  "Board No."
+};
+
 const uint8_t* menuIcons[] = {icon_ctf, icon_domination, icon_KOTH, icon_clicker, icon_chess, icon_settings, icon_settings};
 
 const char* menuLabels2[] = {"Game time", "Countdown"};
 const uint8_t* menuIcons2[] = {icon_gametime, icon_countdown};
 
 
-
-typedef struct game_struct
+void setup()
 {
-  int score;
-  unsigned long gamemodetime;
-  bool endgame;
-  unsigned long checktime;
-  unsigned long newTime;
-  unsigned long testtime;
-  unsigned long recordedTime;
-  int modenum;
-  bool confirm;
-  unsigned long countdowntime;
-  int id;
-  int togglescreen;
-  bool middlelongpressed;
-  bool goback;
-  bool button;
-} game_struct;
-
-game_struct gamedata; // storing data on this board (host)
-game_struct incominggamedata; // for team or host board
-game_struct board1;
-game_struct board2;
-game_struct boards[2] = {board1, board2};
-
-// create variables to assign values from the recv callback function to update and store new values
-bool board1_endgame;
-bool board2_endgame;
-bool board1_button;
-bool board2_button;
-int board1_score;
-int board2_score;
-unsigned long board1_testtime;
-unsigned long board2_testtime;
-unsigned long board1_recordedTime;
-unsigned long board2_recordedTime;
-unsigned long board1_checktime;
-unsigned long board2_checktime;
-unsigned long board1_newTime;
-unsigned long board2_newTime;
-
-
-
-void readstick();
-void oledDisplayCenter();
-void oledDisplayInt();
-void oledDisplayCountdown();
-void oledDisplayStrInt();
-void oledDisplayTime();
-void menudisplay();
-void resetvariables();
-void resetscore();
-void colorWipe(uint32_t c, uint8_t wait);
-void setting();
-void checkendgame();
-void checkscore();
-void checkprogress();
-void togglescreenfunction();
-void readstickinsettings();
-void sendgamemode();
-void sendall();
-void drawmenu();
-void drawmenu2();
-
-
-
-
-
-void setup() {
   Serial.begin(115200);
+  delay(50);
   mp3 = YX5300_ESP32(Serial1, RX, TX); // connected to "Serial0" on PCB
   #ifdef devdebug
     mp3.enableDebugging();
@@ -320,17 +336,26 @@ void setup() {
   Wire.begin(6, 7);
   WiFi.mode(WIFI_STA);
 
-  // Init ESP-NOW
-  if (esp_now_init() != ESP_OK) {
+  // configure pins
+  pinMode(joystick, INPUT);
+  pinMode(cancelButton, INPUT);
+  pinMode(extButton, INPUT);
+
+  // init ESP-NOW
+  if (esp_now_init() != ESP_OK)
+  {
     Serial.println("Error initializing ESP-NOW");
     return;
   }
+  delay(50);
 
+  // once ESPNow is successfully init, register for send CB to get the status of trasnmitted packet
   esp_now_register_send_cb(OnDataSent);
   
-  // Register peer
+  // register peers
   peerInfo.channel = 0;  
   peerInfo.encrypt = false;
+
   // register blue team as a peer
   memcpy(peerInfo.peer_addr, broadcastAddressBlue, 6);
   if (esp_now_add_peer(&peerInfo) != ESP_OK)
@@ -338,6 +363,7 @@ void setup() {
     Serial.println("Failed to add peer");
     return;
   }
+
   //register red team as a peer
   memcpy(peerInfo.peer_addr, broadcastAddressRed, 6);
   if (esp_now_add_peer(&peerInfo) != ESP_OK)
@@ -346,50 +372,45 @@ void setup() {
     return;
   }
 
-  if (!display.begin(SSD1306_SWITCHCAPVCC, SCREEN_ADDRESS)) {
+  // check if OLED display is connected
+  if (!display.begin(SSD1306_SWITCHCAPVCC, SCREEN_ADDRESS))
+  {
     Serial.println(F("SSD1306 allocation failed"));
-    for (;;)
-      ;  // Don't proceed, loop forever
+    delay(50);
+    ESP.restart();
   }
+  delay(50);
+
+  // init OLED display and show logo
   display.clearDisplay();
   display.drawBitmap(0, 0, ifb_logo, 128, 64, 1);
   display.display();
+  display.setTextSize(2);
+  display.setTextColor(SSD1306_WHITE);
 
+  // init neopixels
   pixels.begin();
   pixels.clear();
   pixels.show();
   pixels.setBrightness(30);
 
-  pinMode(joystick, INPUT);
-  pinMode(cancelButton, INPUT);
-  pinMode(extButton, INPUT);
-
-  display.setTextSize(2);
-  display.setTextColor(SSD1306_WHITE);
-  
-
-  // INITIALIZE PREFERENCES HERE
+  // init preferences
   preferences.begin("settings", RW_MODE);
   gamedata.gamemodetime = preferences.getULong("game_duration", 0);
   gamedata.countdowntime = preferences.getULong("game_countdown", 0);
-
-
   // setting defaults for variables to be sent to team boards
   // UNCOMMENT GAMEMODETIME AND COUNTDOWNTIME WHEN NOT USING PREFERENCES
-  //gamedata.gamemodetime = 0;
-  gamedata.modenum = CAPTURE_THE_FLAG;
-  gamedata.confirm = false;
-  //gamedata.countdowntime = 0;
-  gamedata.togglescreen = 0;
-  gamedata.middlelongpressed = false;
-  gamedata.goback = false;
+  // gamedata.gamemodetime = 0;
+  // gamedata.countdowntime = 0;
 
+  // register recv CB
   esp_now_register_recv_cb(esp_now_recv_cb_t(OnDataRecv));
   sendall();
   delay(1000);
 }
 
-void loop() {
+void loop()
+{
   #ifdef calibrate_stick // define calibrate_stick to use
     for(int n = 0; n<10;n++)
     {
@@ -404,7 +425,8 @@ void loop() {
     readstick();
     menudisplay(); // update display on team board with gamedata.modenum
 
-    if (gamedata.middlelongpressed) {
+    if (gamedata.middlelongpressed)
+    {
 
       display.clearDisplay();
       display.display();
@@ -418,7 +440,8 @@ void loop() {
       5. chess clock          -      start from time limit, press once, timer goes down
       */
 
-      switch (menu) {
+      switch (menu)
+      {
         
         case CAPTURE_THE_FLAG:  // 3 mins, press to stop
           preferences.end();
@@ -472,7 +495,7 @@ void loop() {
           break;
 
         default:
-          Serial.println("ERROR AT STARTING GAME SWITCH CASE");
+          Serial.printf("Error! modenum: %d", gamedata.modenum);
           break;
       }
       resetvariables();
